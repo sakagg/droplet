@@ -128,6 +128,29 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
     setAttribs: (node, string) ->
       offset = node.__location.start
       node.attributes = []
+      string = string.toLowerCase()
+
+      if node.nodeName isnt "#documentType"
+        end = string.indexOf(node.nodeName) + node.nodeName.length
+        offset += end
+        string = string[end...]
+        start = 0
+        end = 0
+
+        for att in node.attrs
+          start = string.indexOf att.name.toLowerCase()
+          end = start + att.name.length
+          string = string[end...]
+          if att.value.length isnt 0
+            diff = string.indexOf(att.value.toLowerCase()) + att.value.length
+            string = string[diff...]
+            end += diff
+          node.attributes.push {start: offset + start, end: offset + end}
+          offset += end
+
+      ###
+      offset = node.__location.start
+      node.attributes = []
       start = 1
       end = 0
       squotes = dquotes = false #Inside single or Double quotes respectively
@@ -143,6 +166,7 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
           start = i+1
       node.attributes.shift()
       #console.log node.attributes
+      ###
 
     cleanTree: (node) ->
       if not node
