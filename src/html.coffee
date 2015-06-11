@@ -76,6 +76,7 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
   SCRIPT_SUPPORTING = ['script', 'template']
 
   htmlParser = new parse5.Parser null, {decodeHtmlEntities: false, locationInfo: true}
+  htmlSerializer = new parse5.Serializer null, {encodeHtmlEntities: false}
 
   exports.HTMLParser = class HTMLParser extends parser.Parser
 
@@ -88,7 +89,12 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
     getPrecedence: (node) -> 1
 
     getClasses: (node) ->
-      return [node.nodeName]
+      classes = [node.nodeName]
+      if node.nodeName in ['thead', 'tbody', 'tr', 'table']
+        classes = classes.concat 'add-button'
+        if node.childNodes.length isnt 0
+          classes = classes.concat 'subtract-button'
+      return classes
 
     getColor: (node) ->
       COLORS[node.nodeName] ? COLORS['Default']
@@ -258,6 +264,8 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
             line: lastLine
             column: @lines[lastLine].length
           }
+        else if node.__indentLocation.start is node.__indentLocation.end and node.__endTagLocation
+          bounds.end = @positions[node.__endTagLocation.start]
 
       return bounds
 
@@ -414,6 +422,60 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
   HTMLParser.parens = (leading, trainling, node, context) ->
     return [leading, trainling]
 
+  HTMLParser.handleButton = (text, button, classes) ->
+    fragment = htmlParser.parseFragment text
+    @prototype.cleanTree fragment
+    block = fragment.childNodes[0]
+    if button is 'add-button'
+      extra = null
+      switch block.nodeName
+        when 'tr'
+          extra = htmlParser.parseFragment '<td></td>\n'
+        when 'table'
+          extra = htmlParser.parseFragment '<tr>\n  \n</tr>\n'
+        when 'tbody'
+          extra = htmlParser.parseFragment '<tr>\n  \n</tr>\n'
+        when 'thead'
+          extra = htmlParser.parseFragment '<tr>\n  \n</tr>\n'
+      if extra isnt null
+        block.childNodes = block.childNodes.concat extra.childNodes
+    else if button is 'subtract-button'
+      prev = null
+      if block.nodeName is 'tr'
+        prev = 'td'
+      else if block.nodeName in ['table', 'thead', 'tbody']
+        prev = 'tr'
+      if prev
+        last = block.childNodes.length
+        while last > 0
+          last--
+          if block.childNodes[last].nodeName is prev
+            break
+        block.childNodes = block.childNodes[...last]
+
+    ###
+    console.log text, button, classes
+    blockType = classes[0]
+    if button is 'add-button'
+      if blockType is 'tr'
+        endTagStart = text.length - 5
+        text = text[...endTagStart] + '<td></td>\n' + text[endTagStart...]
+      else
+        endTagStart = null
+        switch blockType
+          when 'table'
+            endTagStart = text.length - 8
+          when 'tbody'
+            endTagStart = text.length - 8
+          when 'thead'
+            endTagStart = text.length - 8
+        if endTagStart isnt null
+          text = text[...endTagStart] + '<tr>\n  \n</tr>\n' + text[endTagStart...]
+
+    console.log text
+    return text
+    ###
+
   HTMLParser.drop = (block, context, pred) ->
 
     blockType = block.classes[0]
@@ -424,124 +486,6 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
       if blockType in allowList and blockType not in forbidList
         return helper.ENCOURAGE
       return helper.FORBID
-
-    ###
-    # Going by https://www.cs.tut.fi/~jkorpela/html/nesting.html
-    if blockType is '#documentType'
-      if contextType is '__segment' and predType is '__segment'
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'html'
-      if blockType in ['head', 'body']
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'head'
-      if blockType in ['title', 'script', 'style', 'isindex', 'base', 'meta', 'link', 'object']
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'body'
-      if blockType in ['ins', 'del'] or blockType in FLOW_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType in ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']
-      if blockType is '#text' or blockType in INLINE_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType in ['ol', 'ul']
-      if blockType is 'li'
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'li'
-      if blockType in FLOW_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType in ['dir', 'menu']
-      if blockType is 'li'
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'dl'
-      if blockType in ['dt', 'dd']
-        return helper.ENCOURAGE
-
-    if contextType is 'dt'
-      if blockType in INLINE_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'pre'
-      if blockType in INLINE_ELEMENTS and blockType not in ['img', 'object', 'applet', 'big', 'small', 'sub', 'sup', 'font', 'basefont']
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType in ['div', 'center', 'blockquote', 'iframe', 'noscript', 'noframes']
-      if blockType in FLOW_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'form'
-      if blockType isnt 'form' and blockType in FLOW_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'table'
-      if blockType in ['caption', 'colgroup', 'col', 'thead', 'tbody', 'tr']
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'tbody'
-      if blockType is 'tr'
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'tr'
-      if blockType in ['td', 'th']
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType in ['tr' ,'td']
-      if blockType in FLOW_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'address'
-      if blockType is 'p' or blockType in INLINE_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'fieldset'
-      if blockType in ['#text', 'legend'] or blockType in FLOW_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'legend'
-      if blockType in INLINE_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType in ['tt', 'i', 'b', 'u', 's', 'strike', 'big', 'small', 'font', 'em', 'strong', 'dfn', 'code', 'samp', 'kbd', 'var', 'cite', 'abbr', 'acronym', 'sub', 'sup', 'q', 'span', 'bdo']
-      if blockType in INLINE_ELEMENTS
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is '#attribute' or contextType is '#text'
-      return helper.FORBID
-
-    if blockType is '#text'
-      if contextType isnt '__segment'
-        return helper.ENCOURAGE
-      return helper.FORBID
-
-    if contextType is 'body' or contextType in BLOCK_ELEMENTS
-      return helper.ENCOURAGE
-    ###
 
     switch contextType
       when 'html'
