@@ -453,6 +453,8 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
             break
         block.childNodes = block.childNodes[...last]
 
+    return htmlSerializer.serialize fragment
+
     ###
     console.log text, button, classes
     blockType = classes[0]
