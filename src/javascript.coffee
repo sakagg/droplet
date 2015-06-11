@@ -14,6 +14,7 @@ define ['droplet-helper', 'droplet-model', 'droplet-parser', 'acorn'], (helper, 
     'alert'       : {}
     'prompt'      : {}
     'console.log' : {}
+    '*.toString'  : {value: true}
     'Math.abs'    : {value: true}
     'Math.acos'   : {value: true}
     'Math.asin'   : {value: true}
@@ -97,6 +98,10 @@ define ['droplet-helper', 'droplet-model', 'droplet-parser', 'acorn'], (helper, 
   # See https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Operator_Precedence
   # These numbers are "19 - x" so that the lowest numbers bind most tightly.
   OPERATOR_PRECEDENCES = {
+    '++': 3
+    '--': 3
+    '!': 4
+    '~': 4
     '*': 5
     '/': 5
     '%': 5
@@ -149,8 +154,6 @@ define ['droplet-helper', 'droplet-model', 'droplet-parser', 'acorn'], (helper, 
         allowReturnOutsideFunction: true
       })
 
-      #console.log 'PROGRAM IS', JSON.stringify tree, null, 2
-
       @mark 0, tree, 0, null
 
     fullFunctionNameArray: (node) ->
@@ -169,13 +172,16 @@ define ['droplet-helper', 'droplet-model', 'droplet-parser', 'acorn'], (helper, 
 
     lookupFunctionName: (node) ->
       fname = @fullFunctionNameArray node
-      if fname.length > 1
-        full = fname.join '.'
-        if full of @opts.functions
-          return name: full, dotted: true, fn: @opts.functions[full]
+      full = fname.join '.'
+      if full of @opts.functions
+        return name: full, anyobj: false, fn: @opts.functions[full]
       last = fname[fname.length - 1]
-      if last of @opts.functions
-        return name: last, dotted: false, fn: @opts.functions[last]
+      if fname.length > 1 and (wildcard = '*.' + last) not of @opts.functions
+        wildcard = null  # no match for '*.foo'
+      if not wildcard and (wildcard = '?.' + last) not of @opts.functions
+        wildcard = null  # no match for '?.foo'
+      if wildcard isnt null
+        return name: last, anyobj: true, fn: @opts.functions[wildcard]
       return null
 
     getAcceptsRule: (node) -> default: helper.NORMAL
@@ -200,15 +206,15 @@ define ['droplet-helper', 'droplet-model', 'droplet-parser', 'acorn'], (helper, 
 
     getPrecedence: (node) ->
       switch node.type
-        when 'BinaryExpression'
+        when 'BinaryExpression', 'LogicalExpression'
           return OPERATOR_PRECEDENCES[node.operator]
         when 'AssignStatement'
           return 16
         when 'UnaryExpression'
           if node.prefix
-            return 4
+            return OPERATOR_PRECEDENCES[node.operator] ? 4
           else
-            return 3
+            return OPERATOR_PRECEDENCES[node.operator] ? 3
         when 'CallExpression'
           return 2
         when 'NewExpression'
@@ -416,8 +422,10 @@ define ['droplet-helper', 'droplet-model', 'droplet-parser', 'acorn'], (helper, 
           known = @lookupFunctionName node
           if not known
             @jsSocketAndMark indentDepth, node.callee, depth + 1, NEVER_PAREN
+          else if known.anyobj and node.callee.type is 'MemberExpression'
+            @jsSocketAndMark indentDepth, node.callee.object, depth + 1, NEVER_PAREN
           for argument, i in node.arguments
-            @jsSocketAndMark indentDepth, argument, depth + 1, NEVER_PAREN, known?.dropdown?[i]
+            @jsSocketAndMark indentDepth, argument, depth + 1, NEVER_PAREN, null, null, known?.fn?.dropdown?[i]
         when 'MemberExpression'
           @jsBlock node, depth, bounds
           @jsSocketAndMark indentDepth, node.object, depth + 1
@@ -435,8 +443,8 @@ define ['droplet-helper', 'droplet-model', 'droplet-parser', 'acorn'], (helper, 
             @jsSocketAndMark indentDepth, node.init, depth
         when 'LogicalExpression'
           @jsBlock node, depth, bounds
-          @jsSocketAndMark indentDepth, node.left, depth + 1
-          @jsSocketAndMark indentDepth, node.right, depth + 1
+          @jsSocketAndMark indentDepth, node.left, depth + 1, @getPrecedence node
+          @jsSocketAndMark indentDepth, node.right, depth + 1, @getPrecedence node
         when 'WhileStatement', 'DoWhileStatement'
           @jsBlock node, depth, bounds
           @jsSocketAndMark indentDepth, node.body, depth + 1
@@ -497,7 +505,7 @@ define ['droplet-helper', 'droplet-model', 'droplet-parser', 'acorn'], (helper, 
         classes: @getClasses node
         socketLevel: @getSocketLevel node
 
-    jsSocketAndMark: (indentDepth, node, depth, precedence, bounds, classes) ->
+    jsSocketAndMark: (indentDepth, node, depth, precedence, bounds, classes, dropdown) ->
       unless node.type is 'BlockStatement'
         @addSocket
           bounds: bounds ? @getBounds node
@@ -505,6 +513,7 @@ define ['droplet-helper', 'droplet-model', 'droplet-parser', 'acorn'], (helper, 
           precedence: precedence
           classes: classes ? []
           accepts: @getAcceptsRule node
+          dropdown: dropdown
 
       @mark indentDepth, node, depth + 1, bounds
 

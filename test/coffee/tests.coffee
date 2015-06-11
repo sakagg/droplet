@@ -3,13 +3,8 @@ require ['droplet-helper', 'droplet-model', 'droplet-parser', 'droplet-coffee', 
   coffee = new Coffee()
 
   asyncTest 'Parser success', ->
-    q = new XMLHttpRequest()
-    q.open 'GET', '/test/data/parserSuccess.json', false
-    q.send()
-
-    data = JSON.parse q.responseText
     window.dumpObj = []
-    for testCase in data
+    for testCase in parserSuccessData
       strictEqual(
         helper.xmlPrettyPrint(coffee.parse(testCase.str, wrapAtRoot: true).serialize()),
         helper.xmlPrettyPrint(testCase.expected),
@@ -23,12 +18,7 @@ require ['droplet-helper', 'droplet-model', 'droplet-parser', 'droplet-coffee', 
     start()
 
   asyncTest 'XML parser unity', ->
-    q = new XMLHttpRequest()
-    q.open 'GET', '/test/data/parserSuccess.json', false
-    q.send()
-
-    data = JSON.parse q.responseText
-    for testCase in data
+    for testCase in parserSuccessData
       xml = coffee.parse(testCase.str, wrapAtRoot: true).serialize()
       strictEqual(
         helper.xmlPrettyPrint(parser.parseXML(xml).serialize()),
@@ -582,6 +572,7 @@ require ['droplet-helper', 'droplet-model', 'droplet-parser', 'droplet-coffee', 
         start()
 
   asyncTest 'Controller: palette events', ->
+    document.getElementById('test-main').innerHTML = ''
     editor = new droplet.Editor document.getElementById('test-main'), {
       mode: 'coffeescript'
       palette: [{
@@ -858,7 +849,7 @@ require ['droplet-helper', 'droplet-model', 'droplet-parser', 'droplet-coffee', 
     editor.showDropdown()
     start()
 
-  asyncTest 'Controller: alwaysShowPalette false', ->
+  asyncTest 'Controller: showPaletteInTextMode false', ->
     expect 4
 
     states = []
@@ -866,7 +857,7 @@ require ['droplet-helper', 'droplet-model', 'droplet-parser', 'droplet-coffee', 
     editor = new droplet.Editor document.getElementById('test-main'), {
       mode: 'coffeescript'
       palette: [],
-      alwaysShowPalette: false
+      showPaletteInTextMode: false
     }
 
     paletteWrapper = document.querySelector('.droplet-palette-wrapper')
@@ -883,7 +874,7 @@ require ['droplet-helper', 'droplet-model', 'droplet-parser', 'droplet-coffee', 
         strictEqual aceEditor.style.left, '-9999px'
         start()
 
-  asyncTest 'Controller: alwaysShowPalette true', ->
+  asyncTest 'Controller: showPaletteInTextMode true', ->
     expect 4
 
     states = []
@@ -891,7 +882,7 @@ require ['droplet-helper', 'droplet-model', 'droplet-parser', 'droplet-coffee', 
     editor = new droplet.Editor document.getElementById('test-main'), {
       mode: 'coffeescript'
       palette: [],
-      alwaysShowPalette: true
+      showPaletteInTextMode: true
     }
 
     paletteWrapper = document.querySelector('.droplet-palette-wrapper')
@@ -907,3 +898,28 @@ require ['droplet-helper', 'droplet-model', 'droplet-parser', 'droplet-coffee', 
         strictEqual paletteWrapper.style.left, '0px'
         strictEqual aceEditor.style.left, '-9999px'
         start()
+
+  asyncTest 'Controller: enablePalette false', ->
+    expect 4
+
+    document.getElementById('test-main').innerHTML = ''
+    editor = new droplet.Editor document.getElementById('test-main'), {
+      mode: 'coffeescript'
+      palette: []
+    }
+
+    paletteWrapper = document.querySelector('.droplet-palette-wrapper')
+    dropletWrapper = document.querySelector('.droplet-wrapper-div')
+
+    strictEqual paletteWrapper.style.left, '0px'
+    strictEqual dropletWrapper.style.left, '270px'
+
+    verifyPaletteHidden = ->
+      strictEqual paletteWrapper.style.left, '-9999px'
+      strictEqual dropletWrapper.style.left, '0px'
+      start()
+
+    editor.enablePalette false
+
+    setTimeout verifyPaletteHidden, 500
+

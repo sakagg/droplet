@@ -7,6 +7,15 @@ notify = (message) ->
     fallback: 0
   ), ->
 
+serveNoDottedFiles = (connect, options, middlewares) ->
+  # Avoid leaking .git/.svn or other dotted files from test servers.
+  middlewares.unshift (req, res, next) ->
+    if req.url.indexOf('/.') < 0 then return next()
+    res.statusCode = 404
+    res.setHeader('Content-Type', 'text/html');
+    res.end "Cannot GET #{req.url}"
+  return middlewares
+
 module.exports = (grunt) ->
   grunt.initConfig
     pkg: grunt.file.readJSON 'package.json'
@@ -54,6 +63,7 @@ module.exports = (grunt) ->
     qunit:
       all:
         options:
+          timeout: 30000
           urls:
             (for x in grunt.file.expand('test/*.html')
               'http://localhost:8942/' + x)
@@ -132,10 +142,12 @@ module.exports = (grunt) ->
       testserver:
         options:
           hostname: '0.0.0.0'
+          middleware: serveNoDottedFiles
       qunitserver:
         options:
           hostname: '0.0.0.0'
           port: 8942
+          middleware: serveNoDottedFiles
 
     watch:
       options:
@@ -173,15 +185,18 @@ module.exports = (grunt) ->
     (testname) ->
       if testname
         grunt.config 'qunit.all', ['test/' + testname + '.html']
+      else
+        grunt.config 'qunit.all', (x for x in grunt.file.expand('test/*.html'))
       grunt.task.run 'connect:qunitserver'
       grunt.task.run 'qunit:all'
       grunt.task.run 'mocha_spawn'
+
   grunt.registerTask 'testserver', ['connect:testserver', 'watch']
   grunt.registerTask 'notify-done', ->
-  grunt.util.spawn (
-    cmd: 'notify-send'
-    args: ['Recompiled.', '--urgency=low']
-    fallback: 0), ->
+    grunt.util.spawn (
+      cmd: 'notify-send'
+      args: ['Recompiled.', '--urgency=low']
+      fallback: 0), ->
 
   grunt.event.on 'watch', (action, filepath) ->
     if grunt.file.isMatch(grunt.config('watch.sources.files'), filepath)

@@ -145,8 +145,10 @@ define ['droplet-helper',
   # ## The Editor Class
   exports.Editor = class Editor
     constructor: (@wrapperElement, @options) ->
+      @readOnly = false
       @paletteGroups = @options.palette
-      @alwaysShowPalette = @options.alwaysShowPalette ? false
+      @showPaletteInTextMode = @options.showPaletteInTextMode ? false
+      @paletteEnabled = @options.enablePaletteAtStart ? true
 
       @options.mode = @options.mode.replace /$\/ace\/mode\//, ''
 
@@ -156,6 +158,9 @@ define ['droplet-helper',
         @mode = new coffee @options.modeOptions
 
       @draw = new draw.Draw()
+
+      # No gutter decorations to start
+      @gutterDecorations = {}
 
       # ## DOM Population
       # This stage of ICE Editor construction populates the given wrapper
@@ -307,9 +312,11 @@ define ['droplet-helper',
       @redrawMain()
       @rebuildPalette()
 
-      # If we were given an unrecognized mode, flip into text mode
-      unless @mode?
-        @setEditorState false
+      # If we were given an unrecognized mode or asked to start in text mode,
+      # flip into text mode here
+      useBlockMode = @mode? && !@options.textModeAtStart
+      # Always call @setEditorState to ensure palette is positioned properly
+      @setEditorState useBlockMode
 
       return this
 
@@ -326,6 +333,13 @@ define ['droplet-helper',
     getMode: ->
       @options.mode
 
+    setReadOnly: (readOnly) ->
+      @readOnly = readOnly
+      @aceEditor.setReadOnly readOnly
+
+    getReadOnly: ->
+      @readOnly
+
     # ## Foundational Resize
     # At the editor core, we will need to resize
     # all of the natively-added canvases, as well
@@ -338,9 +352,13 @@ define ['droplet-helper',
     resizeBlockMode: ->
       @resizeTextMode()
 
-      @dropletElement.style.left = "#{@paletteElement.offsetWidth}px"
-      @dropletElement.style.height = "#{@wrapperElement.offsetHeight}px"
-      @dropletElement.style.width = "#{@wrapperElement.offsetWidth - @paletteWrapper.offsetWidth}px"
+      @dropletElement.style.height = "#{@wrapperElement.clientHeight}px"
+      if @paletteEnabled
+        @dropletElement.style.left = "#{@paletteElement.offsetWidth}px"
+        @dropletElement.style.width = "#{@wrapperElement.clientWidth - @paletteWrapper.offsetWidth}px"
+      else
+        @dropletElement.style.left = "0px"
+        @dropletElement.style.width = "#{@wrapperElement.clientWidth}px"
 
       @resizeGutter()
 
@@ -622,31 +640,38 @@ define ['droplet-helper',
     new @draw.Point(point.x - gbr.left + @scrollOffsets.palette.x,
                     point.y - gbr.top + @scrollOffsets.palette.y)
 
-  Editor::trackerPointIsInMain = (point) ->
-    if not @mainCanvas.offsetParent?
+  Editor::trackerPointIsInElement = (point, element) ->
+    if @readOnly
       return false
-    gbr = @mainCanvas.getBoundingClientRect()
+    if not element.offsetParent?
+      return false
+    gbr = element.getBoundingClientRect()
     return point.x >= gbr.left and point.x < gbr.right and
            point.y >= gbr.top and point.y < gbr.bottom
+
+  Editor::trackerPointIsInMain = (point) ->
+    return this.trackerPointIsInElement point, @mainCanvas
 
   Editor::trackerPointIsInMainScroller = (point) ->
-    if not @mainScroller.offsetParent?
-      return false
-    gbr = @mainScroller.getBoundingClientRect()
-    return point.x >= gbr.left and point.x < gbr.right and
-           point.y >= gbr.top and point.y < gbr.bottom
+    return this.trackerPointIsInElement point, @mainScroller
+
+  Editor::trackerPointIsInGutter = (point) ->
+    return this.trackerPointIsInElement point, @gutter
 
   Editor::trackerPointIsInPalette = (point) ->
-    if not @paletteCanvas.offsetParent?
-      return false
-    gbr = @paletteCanvas.getBoundingClientRect()
-    return point.x >= gbr.left and point.x < gbr.right and
-           point.y >= gbr.top and point.y < gbr.bottom
+    return this.trackerPointIsInElement point, @paletteCanvas
+
+  Editor::trackerPointIsInAce = (point) ->
+    return this.trackerPointIsInElement point, @aceElement
+
 
   # ### hitTest
   # Simple function for going through a linked-list block
   # and seeing what the innermost child is that we hit.
   Editor::hitTest = (point, block) ->
+    if @readOnly
+      return null
+
     head = block.start; seek = block.end
 
     until head is seek
@@ -835,40 +860,38 @@ define ['droplet-helper',
       return clone.end
 
   Editor::spliceOut = (node) ->
-    leading = node.getLeadingText()
-    if node.start.next is node.end.prev
-      trailing = null
-    else
-      trailing = node.getTrailingText()
-
-    [leading, trailing] = @mode.parens leading, trailing, node.getReader(), null
-
-    node.setLeadingText leading; node.setTrailingText trailing
-
+    @prepareNode node, null
     node.spliceOut()
 
   Editor::spliceIn = (node, location) ->
+    container = location.container ? location.visParent()
+    if container.type is 'block'
+      container = container.visParent()
+
+    @prepareNode node, container
+    node.spliceIn location
+
+
+  Editor::prepareNode = (node, context) ->
     leading = node.getLeadingText()
     if node.start.next is node.end.prev
       trailing = null
     else
       trailing = node.getTrailingText()
 
-    container = location.container ? location.visParent()
-
     [leading, trailing] = @mode.parens leading, trailing, node.getReader(),
-      (if container.type is 'block' then container.visParent() else container)?.getReader?() ? null
+      context?.getReader?() ? null
 
     node.setLeadingText leading; node.setTrailingText trailing
 
-    node.spliceIn location
+
 
   # At population-time, we will
   # want to set up a few fields.
   hook 'populate', 0, ->
     @clickedPoint = null
     @clickedBlock = null
-    @clickedBlockIsPaletteBlock = false
+    @clickedBlockPaletteEntry = null
 
     @draggingBlock = null
     @draggingOffset = null
@@ -952,7 +975,7 @@ define ['droplet-helper',
       # Record the hit test result (the block we want to pick up)
       @setTextInputFocus null
       @clickedBlock = hitTestResult
-      @clickedBlockIsPaletteBlock = false
+      @clickedBlockPaletteEntry = null
 
       # Move the cursor somewhere nearby
       @moveCursorTo @clickedBlock.start.next
@@ -1022,11 +1045,15 @@ define ['droplet-helper',
       #
       # NOTE: this really falls under "PALETTE SUPPORT", but must
       # go here. Try to organise this better.
-      if @clickedBlockIsPaletteBlock
+      if @clickedBlockPaletteEntry
         @draggingOffset = @view.getViewNodeFor(@draggingBlock).bounds[0].upperLeftCorner().from(
           @trackerPointToPalette(@clickedPoint))
 
-        @draggingBlock = @draggingBlock.clone()
+        # Substitute in expansion for this palette entry, if supplied.
+        expansion = @clickedBlockPaletteEntry.expansion
+        if 'function' is typeof expansion then expansion = expansion()
+        if (expansion) then expansion = parseBlock(@mode, expansion)
+        @draggingBlock = (expansion or @draggingBlock).clone()
 
       else
         # Find the line on the block that we have
@@ -1107,7 +1134,7 @@ define ['droplet-helper',
 
       # Now we are done with the "clickedX" suite of stuff.
       @clickedPoint = @clickedBlock = null
-      @clickedBlockIsPaletteBlock = false
+      @clickedBlockPaletteEntry = null
 
       @begunTrash = @wouldDelete position
 
@@ -1138,6 +1165,14 @@ define ['droplet-helper',
         point.x + @draggingOffset.x,
         point.y + @draggingOffset.y
       )
+
+      if not @currentlyUsingBlocks
+        if @trackerPointIsInAce position
+          pos = @aceEditor.renderer.screenToTextCoordinates position.x, position.y
+          @aceEditor.focus()
+          @aceEditor.session.selection.moveToPosition pos
+        else
+          @aceEditor.blur()
 
       rect = @wrapperElement.getBoundingClientRect()
 
@@ -1200,67 +1235,117 @@ define ['droplet-helper',
   hook 'mouseup', 1, (point, event, state) ->
     # We will consume this event iff we dropped it successfully
     # in the root tree.
-    if @draggingBlock? and @lastHighlight?
-      if @inTree @draggingBlock
-        # Since we removed this from the tree,
-        # we will need to log an undo operation
-        # to put it back in.
-        @addMicroUndoOperation 'CAPTURE_POINT'
+    if @draggingBlock?
+      if not @currentlyUsingBlocks
+        # See if we can drop the block's text in ace mode.
+        position = new @draw.Point(
+          point.x + @draggingOffset.x,
+          point.y + @draggingOffset.y
+        )
 
-        @addMicroUndoOperation new PickUpOperation @draggingBlock
+        if @trackerPointIsInAce position
+          leadingWhitespaceRegex = /^(\s*)/
+          # Get the line of text we're dropping into
+          pos = @aceEditor.renderer.screenToTextCoordinates position.x, position.y
+          line = @aceEditor.session.getLine pos.row
+          currentIndentation = leadingWhitespaceRegex.exec(line)[0]
 
-        # Remove the block from the tree.
-        @spliceOut @draggingBlock
+          prefix = ''
+          indentation = currentIndentation
+          suffix = ''
 
-      @clearHighlightCanvas()
+          if currentIndentation.length == line.length
+            # line is whitespace only.
+            # Append with a newline
+            suffix = '\n' + indentation
+          else if pos.column == line.length
+            # We're at the end of a non-empty line.
+            # Insert a new line, and base our indentation off of the next line
+            prefix = '\n'
+            nextLine = @aceEditor.session.getLine(pos.row + 1)
+            indentation = leadingWhitespaceRegex.exec(nextLine)[0]
+          else
 
-      # Depending on what the highlighted element is,
-      # we might want to drop the block at its
-      # beginning or at its end.
-      #
-      # We will need to log undo operations here too.
-      switch @lastHighlight.type
-        when 'indent', 'socket'
-          @addMicroUndoOperation new DropOperation @draggingBlock, @lastHighlight.start
-          @spliceIn @draggingBlock, @lastHighlight.start #MUTATION
-        when 'block'
-          @addMicroUndoOperation new DropOperation @draggingBlock, @lastHighlight.end
-          @spliceIn @draggingBlock, @lastHighlight.end #MUTATION
+          # Call prepareNode, which may append with a semicolon
+          @prepareNode @draggingBlock, null
+          text = @draggingBlock.stringify @mode
+
+          # Indent each line, unless it's the first line and wasn't placed on
+          # a newline
+          text = text.split('\n').map((line, index) =>
+            return (if index == 0 and prefix == '' then '' else indentation) + line
+          ).join('\n')
+
+          text = prefix + text + suffix
+
+          @aceEditor.onTextInput text
+      else if  @lastHighlight?
+
+        if @inTree @draggingBlock
+          # Since we removed this from the tree,
+          # we will need to log an undo operation
+          # to put it back in.
+          @addMicroUndoOperation 'CAPTURE_POINT'
+
+          @addMicroUndoOperation new PickUpOperation @draggingBlock
+
+          # Remove the block from the tree.
+          @spliceOut @draggingBlock
+
+        @clearHighlightCanvas()
+
+        # Depending on what the highlighted element is,
+        # we might want to drop the block at its
+        # beginning or at its end.
+        #
+        # We will need to log undo operations here too.
+        switch @lastHighlight.type
+          when 'indent', 'socket'
+            @addMicroUndoOperation new DropOperation @draggingBlock, @lastHighlight.start
+            @spliceIn @draggingBlock, @lastHighlight.start #MUTATION
+          when 'block'
+            @addMicroUndoOperation new DropOperation @draggingBlock, @lastHighlight.end
+            @spliceIn @draggingBlock, @lastHighlight.end #MUTATION
+          else
+            if @lastHighlight is @tree
+              @addMicroUndoOperation new DropOperation @draggingBlock, @tree.start
+              @spliceIn @draggingBlock, @tree.start #MUTATION
+
+        # Move the cursor to the position we just
+        # dropped the block
+        @moveCursorTo @draggingBlock.end, true
+
+        # Reparse the parent if we are
+        # in a socket
+        #
+        # TODO "reparseable" property, bubble up
+        # TODO performance on large programs
+        if @lastHighlight.type is 'socket'
+          @reparseRawReplace @draggingBlock.parent.parent
+
         else
-          if @lastHighlight is @tree
-            @addMicroUndoOperation new DropOperation @draggingBlock, @tree.start
-            @spliceIn @draggingBlock, @tree.start #MUTATION
+          # If what we've dropped has a socket in it,
+          # focus it.
+          head = @draggingBlock.start
+          until head.type is 'socketStart' and head.container.isDroppable() or head is @draggingBlock.end
+            head = head.next
 
-      # Move the cursor to the position we just
-      # dropped the block
-      @moveCursorTo @draggingBlock.end, true
+          if head.type is 'socketStart'
+            @setTextInputFocus null
+            @setTextInputFocus head.container
 
-      # Reparse the parent if we are
-      # in a socket
-      #
-      # TODO "reparseable" property, bubble up
-      # TODO performance on large programs
-      if @lastHighlight.type is 'socket'
-        @reparseRawReplace @draggingBlock.parent.parent
+        # Fire the event for sound
+        @fireEvent 'block-click'
 
-      else
-        # If what we've dropped has a socket in it,
-        # focus it.
-        head = @draggingBlock.start
-        until head.type is 'socketStart' and head.container.isDroppable() or head is @draggingBlock.end
-          head = head.next
+        # Now that we've done that, we can annul stuff.
+        @endDrag()
 
-        if head.type is 'socketStart'
-          @setTextInputFocus null
-          @setTextInputFocus head.container
+  Editor::reparseRawReplace = (oldBlock, originalTrigger = oldBlock) ->
+    # Get the parent in case we need to bubble
+    # up later
+    parent = oldBlock.visParent()
 
-      # Fire the event for sound
-      @fireEvent 'block-click'
-
-      # Now that we've done that, we can annul stuff.
-      @endDrag()
-
-  Editor::reparseRawReplace = (oldBlock) ->
+    # Attempt to parse the block we are given out-of-context
     try
       newParse = @mode.parse(oldBlock.stringify(@mode), wrapAtRoot: true)
       newBlock = newParse.start.next.container
@@ -1268,16 +1353,24 @@ define ['droplet-helper',
           newBlock?.type is 'block'
         @addMicroUndoOperation new ReparseOperation oldBlock, newBlock
 
-        if @cursor.hasParent oldBlock
-          pos = @getRecoverableCursorPosition()
-          newBlock.rawReplace oldBlock
-          @recoverCursorPosition pos
-        else
-          newBlock.rawReplace oldBlock
+        # Recover the cursor position before and after.
+        # TODO upon refactoring, the cursor should no longer
+        # need to be recovered; it should be a row/col pointer
+        # all the time.
+        pos = @getRecoverableCursorPosition()
+        newBlock.rawReplace oldBlock
+        @recoverCursorPosition pos
 
     catch e
-      throw e
-      return false
+      # Attempt to bubble up the reparse, passing along
+      # the original block that triggered the reparse.
+      if parent?
+        return @reparseRawReplace parent, originalTrigger
+      else
+        # Mark the original triggering block as having caused
+        # an error.
+        @markBlock originalTrigger, {color: '#F00'}
+        return false
 
   Editor::findForReal = (token) ->
     head = @tree.start; i = 0
@@ -1472,6 +1565,12 @@ define ['droplet-helper',
 
     @setPalette @paletteGroups
 
+  parseBlock = (mode, code) =>
+    block = mode.parse(code).start.next.container
+    block.spliceOut()
+    block.parent = null
+    return block
+
   Editor::setPalette = (paletteGroups) ->
     @paletteHeader.innerHTML = ''
     @paletteGroups = paletteGroups
@@ -1505,10 +1604,11 @@ define ['droplet-helper',
 
       # Parse all the blocks in this palette and clone them
       for data in paletteGroup.blocks
-        newBlock = @mode.parse(data.block).start.next.container
-        newBlock.spliceOut(); newBlock.parent = null
+        newBlock = parseBlock(@mode, data.block)
+        expansion = data.expansion or null
         newPaletteBlocks.push
           block: newBlock
+          expansion: expansion
           title: data.title
           id: data.id
 
@@ -1572,12 +1672,12 @@ define ['droplet-helper',
           @setTextInputFocus null
           @clickedBlock = entry.block
           @clickedPoint = point
-          @clickedBlockIsPaletteBlock = true
+          @clickedBlockPaletteEntry = entry
           state.consumedHitTest = true
           @fireEvent 'pickblock', [entry.id]
           return
 
-    @clickedBlockIsPaletteBlock = false
+    @clickedBlockPaletteEntry = null
 
   # PALETTE HIGHLIGHT CODE
   # ================================
@@ -1689,9 +1789,20 @@ define ['droplet-helper',
 
     @hiddenInput.addEventListener 'focus', =>
       if @textFocus?
+        # Must ensure that @hiddenInput is within the client area
+        # or else the other divs under @dropletElement will scroll out of
+        # position when @hiddenInput receives keystrokes with focus
+        # (left and top should not be closer than 10 pixels from the edge)
+
         bounds = @view.getViewNodeFor(@textFocus).bounds[0]
-        @hiddenInput.style.left = (bounds.x + @mainCanvas.offsetLeft) + 'px'
-        @hiddenInput.style.top = bounds.y + 'px'
+        inputLeft = bounds.x + @mainCanvas.offsetLeft - @scrollOffsets.main.x
+        inputLeft = Math.min inputLeft, @dropletElement.clientWidth - 10
+        inputLeft = Math.max @mainCanvas.offsetLeft, inputLeft
+        @hiddenInput.style.left = inputLeft + 'px'
+        inputTop = bounds.y - @scrollOffsets.main.y
+        inputTop = Math.min inputTop, @dropletElement.clientHeight - 10
+        inputTop = Math.max 0, inputTop
+        @hiddenInput.style.top = inputTop + 'px'
 
     @dropletElement.appendChild @hiddenInput
 
@@ -1722,11 +1833,12 @@ define ['droplet-helper',
           @redrawTextInput()
 
   Editor::resizeAceElement = ->
-    width = @wrapperElement.offsetWidth
-    if @alwaysShowPalette
+    width = @wrapperElement.clientWidth
+    if @showPaletteInTextMode and @paletteEnabled
       width -= @paletteElement.offsetWidth
+
     @aceElement.style.width = "#{width}px"
-    @aceElement.style.height = "#{@wrapperElement.offsetHeight}px"
+    @aceElement.style.height = "#{@wrapperElement.clientHeight}px"
 
   last_ = (array) -> array[array.length - 1]
 
@@ -1852,8 +1964,11 @@ define ['droplet-helper',
   escapeString = (str) ->
     str[0] + str[1...-1].replace(/(\'|\"|\n)/g, '\\$1') + str[str.length - 1]
 
-  # Convenince function for setting the text input
+  # Convenience function for setting the text input
   Editor::setTextInputFocus = (focus, selectionStart = null, selectionEnd = null) ->
+    if @readOnly
+      return
+
     if focus?.id of @extraMarks
       delete @extraMarks[focus?.id]
 
@@ -1879,8 +1994,32 @@ define ['droplet-helper',
         cursorPosition = @getRecoverableCursorPosition()
 
       # The second of these is a reparse attempt.
+      #
       # If we can, try to reparse the focus
       # value.
+      #
+      # When reparsing occurs, we first try to treat the socket
+      # as a separate block (inserting parentheses, etc), then fall
+      # back on reparsing it with original text before giving up.
+      #
+      # For instance:
+      #
+      # (a * b)
+      #   -> edits [b] to [b + c]
+      #   -> reparse to b + c
+      #   -> inserts with parens to (a * (b + c))
+      #   -> finished.
+      #
+      # OR
+      #
+      # function (a) {}
+      #   -> edits [a] to [a, b]
+      #   -> reparse to a, b
+      #   -> inserts with parens to function((a, b)) {}
+      #   -> FAILS.
+      #   -> Fall back to raw reparsing the parent with unparenthesized text
+      #   -> Reparses function(a, b) {} with two paremeters.
+      #   -> Finsihed.
       unless @textFocus.handwritten
         newParse = null
         string = @mode.escapeString @textFocus.stringify(@mode)
@@ -1899,16 +2038,15 @@ define ['droplet-helper',
           @addMicroUndoOperation new TextReparseOperation @textFocus, unparsedValue
           shouldPop = true
 
-      # TODO make 'reparsable' property, bubble up until then
+      # See if the parent is still parseable
       unless @reparseRawReplace @textFocus.parent
-        # If we can't reparse the parent, abort all reparses
+        # If it is not, revert to the original text
         @populateSocket @textFocus, originalText
-
         if shouldPop then @undoStack.pop()
 
-        #@extraMarks[@textFocus.id] =
-        #  model: @textFocus
-        #  style: {color: '#F00'}
+        # Attempt to reparse the parent again with
+        # the original text; otherwise fail.
+        @reparseRawReplace @textFocus.parent
 
         @redrawMain()
 
@@ -2108,18 +2246,28 @@ define ['droplet-helper',
         div.style.fontSize = @fontSize
         div.style.paddingLeft = helper.DROPDOWN_ARROW_WIDTH
 
-        div.addEventListener 'mouseup', =>
-          @populateSocket @textFocus, el.text
-          @hiddenInput.value = el.text
+        setText = (text) =>
+          # Attempting to populate the socket after the dropdown has closed should no-op
+          return if @dropdownElement.style.display == 'none'
+
+          @populateSocket @textFocus, text
+          @hiddenInput.value = text
 
           @redrawMain()
           @hideDropdown()
+
+        div.addEventListener 'mouseup', ->
+          if el.click
+            el.click(setText)
+          else
+            setText(el.text)
         @dropdownElement.appendChild div
 
       location = @view.getViewNodeFor(@textFocus).bounds[0]
 
-      @dropdownElement.style.top = location.y + @fontSize - @scrollOffsets.main.y
-      @dropdownElement.style.left = location.x - @scrollOffsets.main.x + @dropletElement.offsetLeft + @mainCanvas.offsetLeft
+      @dropdownElement.style.top = location.y + @fontSize - @scrollOffsets.main.y + 'px'
+      @dropdownElement.style.left = location.x - @scrollOffsets.main.x + @dropletElement.offsetLeft + @mainCanvas.offsetLeft + 'px'
+      @dropdownElement.style.minWidth = location.width + 'px'
 
   Editor::hideDropdown= ->
     @dropdownElement.style.display = 'none'
@@ -2432,7 +2580,7 @@ define ['droplet-helper',
     if @lassoSegment? and @hitTest(@trackerPointToMain(point), @lassoSegment)?
       @setTextInputFocus null
       @clickedBlock = @lassoSegment
-      @clickedBlockIsPaletteBlock = false
+      @clickedBlockPaletteEntry = null
       @clickedPoint = point
 
       state.consumedHitTest = true
@@ -2589,13 +2737,12 @@ define ['droplet-helper',
 
       if head.type is 'socketStart' and
           (head.next.type is 'text' or head.next is head.container.end)
-        # Avoid problems with reparses
-        if @textFocus? and head.container.hasParent @textFocus.parent
-          persistentParent = @textFocus.getCommonParent(head.container).parent
-
-          chars = getCharactersTo persistentParent, head.container.start
+        # Avoid problems with reparses by getting text offset location
+        # of the given socket before reparsing and recovering it afterward.
+        if @textFocus?
+          chars = @getCharactersTo head.container.start
           @setTextInputFocus null
-          socket = getSocketAtChar persistentParent, chars
+          socket = @getSocketAtChar chars
         else
           socket = head.container
           @setTextInputFocus null
@@ -2666,18 +2813,18 @@ define ['droplet-helper',
     @setTextInputFocus null
     @scrollCursorIntoPosition()
 
-  getCharactersTo = (parent, token) ->
+  Editor::getCharactersTo = (token) ->
     head = token
     chars = 0
 
-    until head is parent.start
+    until head is @tree.start
       if head.type is 'text' then chars += head.value.length
       head = head.prev
 
     return chars
 
-  getSocketAtChar = (parent, chars) ->
-    head = parent.start
+  Editor::getSocketAtChar = (chars) ->
+    head = @tree.start
     charsCounted = 0
 
     until charsCounted >= chars and head.type is 'socketStart' and
@@ -2699,12 +2846,12 @@ define ['droplet-helper',
         head = head.prev
 
       if head?
-        if @textFocus? and head.container.hasParent @textFocus.parent
-          persistentParent = @textFocus.getCommonParent(head.container).parent
-
-          chars = getCharactersTo persistentParent, head.container.start
+        # Avoid problems with reparses by getting text offset location
+        # of the given socket before reparsing and recovering it afterward.
+        if @textFocus?
+          chars = @getCharactersTo head.container.start
           @setTextInputFocus null
-          socket = getSocketAtChar persistentParent, chars
+          socket = @getSocketAtChar chars
         else
           socket = head.container
           @setTextInputFocus null
@@ -2720,12 +2867,12 @@ define ['droplet-helper',
           (head.container.start.next.type is 'text' or head.container.start.next is head.container.end)
         head = head.next
       if head?
-        if @textFocus? and head.container.hasParent @textFocus.parent
-          persistentParent = @textFocus.getCommonParent(head.container).parent
-
-          chars = getCharactersTo persistentParent, head.container.start
+        # Avoid problems with reparses by getting text offset location
+        # of the given socket before reparsing and recovering it afterward.
+        if @textFocus?
+          chars = @getCharactersTo head.container.start
           @setTextInputFocus null
-          socket = getSocketAtChar persistentParent, chars
+          socket = @getSocketAtChar chars
         else
           socket = head.container
           @setTextInputFocus null
@@ -2771,6 +2918,8 @@ define ['droplet-helper',
       @redrawMain()
 
   hook 'keydown', 0, (event, state) ->
+    if @readOnly
+      return
     if event.which isnt BACKSPACE_KEY
       return
     if state.capturedBackspace
@@ -2815,6 +2964,8 @@ define ['droplet-helper',
     @handwrittenBlocks = []
 
   hook 'keydown', 0, (event, state) ->
+    if @readOnly
+      return
     if event.which is ENTER_KEY
       if not @textFocus? and not event.shiftKey
         @setTextInputFocus null
@@ -2847,6 +2998,8 @@ define ['droplet-helper',
         @setTextInputFocus null; @redrawMain()
 
   hook 'keyup', 0, (event, state) ->
+    if @readOnly
+      return
     # prevents routing the initial enter keypress to a new handwritten
     # block by focusing the block only after the enter key is released.
     if event.which is ENTER_KEY
@@ -2885,19 +3038,9 @@ define ['droplet-helper',
   # ================================
 
   Editor::copyAceEditor = ->
-    clearTimeout @changeFromAceTimer
-    @changeFromAceTimer = null
     @gutter.style.width = @aceEditor.renderer.$gutterLayer.gutterWidth + 'px'
     @resizeBlockMode()
     return @setValue_raw @getAceValue()
-
-  Editor::changeFromAceEditor = ->
-    if @changeFromAceTimer then return
-    @changeFromAceTimer = setTimeout (=>
-      result = @copyAceEditor()
-      if not result.success and result.error
-        @fireEvent 'parseerror', [result.error]
-    ), 0
 
   hook 'populate', 0, ->
     @aceElement = document.createElement 'div'
@@ -2913,13 +3056,6 @@ define ['droplet-helper',
     if acemode is 'coffeescript' then acemode = 'coffee'
     @aceEditor.getSession().setMode 'ace/mode/' + acemode
     @aceEditor.getSession().setTabSize 2
-
-    @aceEditor.on 'change', =>
-      if @suppressAceChangeEvent then return
-      if @currentlyUsingBlocks
-        @changeFromAceEditor()
-      else
-        @fireEvent 'change', []
 
     @currentlyUsingBlocks = true
     @currentlyAnimating = false
@@ -3045,6 +3181,8 @@ define ['droplet-helper',
 
   Editor::performMeltAnimation = (fadeTime = 500, translateTime = 1000, cb = ->) ->
     if @currentlyUsingBlocks and not @currentlyAnimating
+      @hideDropdown()
+
       @fireEvent 'statechange', [false]
 
       @setAceValue @getValue()
@@ -3063,12 +3201,9 @@ define ['droplet-helper',
       else
         @mainScroller.style.overflowX = 'hidden'
       @mainScroller.style.overflowY = 'hidden'
-      @dropletElement.style.width = @wrapperElement.offsetWidth + 'px'
+      @dropletElement.style.width = @wrapperElement.clientWidth + 'px'
 
       @currentlyUsingBlocks = false; @currentlyAnimating = @currentlyAnimating_suppressRedraw = true
-
-      # Move the palette header into the background
-      @paletteHeader.style.zIndex = 0
 
       # Compute where the text will end up
       # in the ace editor
@@ -3153,7 +3288,12 @@ define ['droplet-helper',
         @highlightCanvas.style.opacity =
         @cursorCanvas.style.opacity = 0
 
-      if not @alwaysShowPalette
+      paletteDisappearingWithMelt = @paletteEnabled and not @showPaletteInTextMode
+
+      if paletteDisappearingWithMelt
+        # Move the palette header into the background
+        @paletteHeader.style.zIndex = 0
+
         setTimeout (=>
           @dropletElement.style.transition =
             @paletteWrapper.style.transition = "left #{translateTime}ms"
@@ -3167,16 +3307,16 @@ define ['droplet-helper',
         @dropletElement.style.transition =
           @paletteWrapper.style.transition = ''
 
-        if not @alwaysShowPalette
-          @paletteWrapper.style.top = '-9999px'
-          @paletteWrapper.style.left = '-9999px'
-
         # Translate the ACE editor div into frame.
         @aceElement.style.top = '0px'
-        if @alwaysShowPalette
+        if @showPaletteInTextMode and @paletteEnabled
           @aceElement.style.left = "#{@paletteWrapper.offsetWidth}px"
         else
           @aceElement.style.left = '0px'
+
+        if paletteDisappearingWithMelt
+          @paletteWrapper.style.top = '-9999px'
+          @paletteWrapper.style.left = '-9999px'
 
         @dropletElement.style.top = '-9999px'
         @dropletElement.style.left = '-9999px'
@@ -3224,7 +3364,7 @@ define ['droplet-helper',
       setTimeout (=>
         # Hide scrollbars and increase width
         @mainScroller.style.overflow = 'hidden'
-        @dropletElement.style.width = @wrapperElement.offsetWidth + 'px'
+        @dropletElement.style.width = @wrapperElement.clientWidth + 'px'
 
         @redrawMain noText: true
 
@@ -3233,15 +3373,18 @@ define ['droplet-helper',
         @aceElement.style.top = "-9999px"
         @aceElement.style.left = "-9999px"
 
-        @paletteWrapper.style.top = '0px'
-        if not @alwaysShowPalette
-          # Don't need to move palette if already showing
+        paletteAppearingWithFreeze = @paletteEnabled and not @showPaletteInTextMode
+
+        if paletteAppearingWithFreeze
+          @paletteWrapper.style.top = '0px'
           @paletteWrapper.style.left = "#{-@paletteWrapper.offsetWidth}px"
+          @paletteHeader.style.zIndex = 0
 
         @dropletElement.style.top = "0px"
-        @dropletElement.style.left = "0px"
-
-        @paletteHeader.style.zIndex = 0
+        if @paletteEnabled and not paletteAppearingWithFreeze
+          @dropletElement.style.left = "#{@paletteWrapper.offsetWidth}px"
+        else
+          @dropletElement.style.left = "0px"
 
         {textElements, translationVectors} = @computePlaintextTranslationVectors()
 
@@ -3329,12 +3472,12 @@ define ['droplet-helper',
 
         ), translateTime
 
-        if not @alwaysShowPalette
-          @dropletElement.style.transition =
-            @paletteWrapper.style.transition = "left #{fadeTime}ms"
+        @dropletElement.style.transition = "left #{fadeTime}ms"
 
-        @dropletElement.style.left = "#{@paletteWrapper.offsetWidth}px"
-        @paletteWrapper.style.left = '0px'
+        if paletteAppearingWithFreeze
+          @paletteWrapper.style.transition = @dropletElement.style.transition
+          @dropletElement.style.left = "#{@paletteWrapper.offsetWidth}px"
+          @paletteWrapper.style.left = '0px'
 
         setTimeout (=>
           @dropletElement.style.transition =
@@ -3361,6 +3504,60 @@ define ['droplet-helper',
       ), 0
 
       return success: true
+
+  Editor::enablePalette = (enabled) ->
+    if not @currentlyAnimating and @paletteEnabled != enabled
+      @paletteEnabled = enabled
+      @currentlyAnimating = true
+
+      if @currentlyUsingBlocks
+        activeElement = @dropletElement
+      else
+        activeElement = @aceElement
+
+      if not @paletteEnabled
+        activeElement.style.transition =
+          @paletteWrapper.style.transition = "left 500ms"
+
+        activeElement.style.left = '0px'
+        @paletteWrapper.style.left = "#{-@paletteWrapper.offsetWidth}px"
+
+        @paletteHeader.style.zIndex = 0
+
+        @resize()
+
+        setTimeout (=>
+          activeElement.style.transition =
+            @paletteWrapper.style.transition = ''
+
+          @paletteWrapper.style.top = '-9999px'
+          @paletteWrapper.style.left = '-9999px'
+
+          @currentlyAnimating = false
+        ), 500
+
+      else
+        @paletteWrapper.style.top = '0px'
+        @paletteWrapper.style.left = "#{-@paletteWrapper.offsetWidth}px"
+        @paletteHeader.style.zIndex = 257
+
+        setTimeout (=>
+          activeElement.style.transition =
+            @paletteWrapper.style.transition = "left 500ms"
+
+          activeElement.style.left = "#{@paletteWrapper.offsetWidth}px"
+          @paletteWrapper.style.left = '0px'
+
+          setTimeout (=>
+            activeElement.style.transition =
+              @paletteWrapper.style.transition = ''
+
+            @resize()
+
+            @currentlyAnimating = false
+          ), 500
+        ), 0
+
 
   Editor::toggleBlocks = (cb) ->
     if @currentlyUsingBlocks
@@ -3525,6 +3722,16 @@ define ['droplet-helper',
         style: style
 
     @redrawHighlights()
+
+  Editor::markBlock = (block, style) ->
+    key = @nextMarkedBlockId++
+
+    @markedBlocks[key] = {
+      model: block
+      style: style
+    }
+
+    return key
 
   # ## Mark
   # `mark(line, col, style)` will mark the first block after the given (line, col) coordinate
@@ -3717,12 +3924,16 @@ define ['droplet-helper',
 
   Editor::setEditorState = (useBlocks) ->
     if useBlocks
-      @setValue @getAceValue()
+      unless @currentlyUsingBlocks
+        @setValue @getAceValue()
 
-      @dropletElement.style.top =
+      @dropletElement.style.top = '0px'
+      if @paletteEnabled
         @paletteWrapper.style.top = @paletteWrapper.style.left = '0px'
-
-      @dropletElement.style.left = "#{@paletteWrapper.offsetWidth}px"
+        @dropletElement.style.left = "#{@paletteWrapper.offsetWidth}px"
+      else
+        @paletteWrapper.style.top = @paletteWrapper.style.left = '-9999px'
+        @dropletElement.style.left = '0px'
 
       @aceElement.style.top = @aceElement.style.left = '-9999px'
       @currentlyUsingBlocks = true
@@ -3735,16 +3946,31 @@ define ['droplet-helper',
       @resizeBlockMode(); @redrawMain()
 
     else
+      @hideDropdown()
+
+      paletteVisibleInNewState = @paletteEnabled and @showPaletteInTextMode
+
       oldScrollTop = @aceEditor.session.getScrollTop()
 
-      @setAceValue @getValue()
+      if @currentlyUsingBlocks
+        @setAceValue @getValue()
+
       @aceEditor.resize true
 
       @aceEditor.session.setScrollTop oldScrollTop
 
-      @dropletElement.style.top = @dropletElement.style.left =
+      @dropletElement.style.top = @dropletElement.style.left = '-9999px'
+      if paletteVisibleInNewState
+        @paletteWrapper.style.top = @paletteWrapper.style.left = '0px'
+      else
         @paletteWrapper.style.top = @paletteWrapper.style.left = '-9999px'
-      @aceElement.style.top = @aceElement.style.left = '0px'
+
+      @aceElement.style.top = '0px'
+      if paletteVisibleInNewState
+        @aceElement.style.left = "#{@paletteWrapper.offsetWidth}px"
+      else
+        @aceElement.style.left = '0px'
+
       @currentlyUsingBlocks = false
 
       @lineNumberWrapper.style.display = 'none'
@@ -4036,6 +4262,48 @@ define ['droplet-helper',
 
     @dropletElement.appendChild @gutter
 
+  Editor::addGutterDecoration = (row, className) ->
+    if not @gutterDecorations[row]
+      @gutterDecorations[row] = []
+    decorations = @gutterDecorations[row]
+    if className in decorations then return
+    decorations.push className
+    # rebuild class attribute on row # row
+    # overkill here:
+    @redrawMain()
+
+  Editor::removeGutterDecoration = (row, className) ->
+    @redrawMain()
+    if not @gutterDecorations[row] then return
+    decorations = @gutterDecorations[row]
+    if className not in decorations
+      return
+    decorations.splice(decorations.indexOf(className), 1)
+    if decorations.length == 0
+      @gutterDecorations[row] = null
+    # rebuild class attribute on row # row
+    # overkill here:
+    @redrawMain()
+
+  Editor::hasGutterDecoration = (row, className) ->
+    if not @gutterDecorations[row] then return false
+    return className in @gutterDecorations[row]
+
+  Editor::toggleGutterDecoration = (row, className) ->
+    if @hasGutterDecoration(row, className)
+      @removeGutterDecoration row, className
+    else
+      @addGutterDecoration row, className
+
+  hook 'mousedown', 11, (point, event, state) ->
+    # check if mousedown within the gutter
+    if not @trackerPointIsInGutter(point) then return
+    mainPoint = @trackerPointToMain point
+    treeView = @view.getViewNodeFor @tree
+    clickedLine = @findLineNumberAtCoordinate mainPoint.y
+    @fireEvent 'guttermousedown', [{line: clickedLine, event: event}]
+    true
+
   Editor::resizeGutter = ->
     @gutter.style.width = @aceEditor.renderer.$gutterLayer.gutterWidth + 'px'
     @gutter.style.height = "#{Math.max @dropletElement.offsetHeight, @view.getViewNodeFor(@tree).totalBounds?.height ? 0}px"
@@ -4049,12 +4317,14 @@ define ['droplet-helper',
 
     else
       lineDiv = document.createElement 'div'
-      lineDiv.className = 'droplet-gutter-line'
       lineDiv.innerText = lineDiv.textContent = line + 1
-
       @lineNumberTags[line] = lineDiv
 
-    lineDiv.style.top = "#{treeView.bounds[line].y + treeView.distanceToBase[line].above - @view.opts.textHeight - @fontAscent - @scrollOffsets.main.y}px"
+    lineDiv.className = 'droplet-gutter-line'
+    if @gutterDecorations[line]
+      lineDiv.className += ' ' + @gutterDecorations[line].join(' ')
+    lineDiv.style.top = "#{treeView.bounds[line].y - @scrollOffsets.main.y}px"
+    lineDiv.style.paddingTop = "#{treeView.distanceToBase[line].above - @view.opts.textHeight - @fontAscent}px"
     lineDiv.style.height =  treeView.bounds[line].height + 'px'
     lineDiv.style.fontSize = @fontSize + 'px'
 
@@ -4127,12 +4397,14 @@ define ['droplet-helper',
         pressedXKey = false
 
     @copyPasteInput.addEventListener 'input', =>
+      if @readOnly
+        return
       if pressedVKey
         try
           str = @copyPasteInput.value; minIndent = Infinity
 
           for line in str.split '\n'
-            minIndent = Math.min minIndent, str.length - str.trimLeft().length
+            minIndent = Math.min minIndent, line.length - line.trimLeft().length
 
           str = (for line in str.split '\n'
             line[minIndent...]
