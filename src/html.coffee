@@ -430,13 +430,13 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
       extra = null
       switch block.nodeName
         when 'tr'
-          extra = htmlParser.parseFragment '<td></td>\n'
+          extra = htmlParser.parseFragment '  <td></td>\n'
         when 'table'
-          extra = htmlParser.parseFragment '<tr>\n  \n</tr>\n'
+          extra = htmlParser.parseFragment '  <tr>\n  \n  </tr>\n'
         when 'tbody'
-          extra = htmlParser.parseFragment '<tr>\n  \n</tr>\n'
+          extra = htmlParser.parseFragment '  <tr>\n  \n  </tr>\n'
         when 'thead'
-          extra = htmlParser.parseFragment '<tr>\n  \n</tr>\n'
+          extra = htmlParser.parseFragment '  <tr>\n  \n  </tr>\n'
       if extra isnt null
         block.childNodes = block.childNodes.concat extra.childNodes
     else if button is 'subtract-button'
