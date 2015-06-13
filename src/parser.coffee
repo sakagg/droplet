@@ -472,9 +472,6 @@ Parser.escapeString = (str) ->
         str = str[0] + str[1...-1].replace(/(\'|\"|\n)/g, '\\$1') + str[str.length - 1]
   return str
 
-Parser.handleButton = (text, command, classes) ->
-  return text
-
 Parser.empty = ''
 Parser.emptyIndent = ''
 
@@ -515,5 +512,3 @@ exports.wrapParser = (CustomParser) ->
     drop: (block, context, pred) -> CustomParser.drop block, context, pred
 
     escapeString: (str) -> CustomParser.escapeString str
-
-    handleButton: (text, command, classes) -> CustomParser.handleButton text, command, classes
