@@ -90,7 +90,7 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
 
     getClasses: (node) ->
       classes = [node.nodeName]
-      if node.nodeName in ['thead', 'tbody', 'tr', 'table']
+      if node.nodeName in ['thead', 'tbody', 'tr', 'table', 'div']
         classes = classes.concat 'add-button'
         if node.childNodes.length isnt 0
           classes = classes.concat 'subtract-button'
@@ -355,13 +355,18 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
       window.text = @text
 
       try
-        root = htmlParser.parse @text
-        @cleanTree root
-        @fixBounds root
-        if root.childNodes.length is 0
+        if @opts.parseOptions?.wrapAtRoot is false
           root = htmlParser.parseFragment @text
           @cleanTree root
           @fixBounds root
+        else
+          root = htmlParser.parse @text
+          @cleanTree root
+          @fixBounds root
+          if root.childNodes.length is 0
+            root = htmlParser.parseFragment @text
+            @cleanTree root
+            @fixBounds root
         window.root = root
         @mark 0, root, 0, null
       catch e
@@ -426,32 +431,44 @@ define ['droplet-helper', 'droplet-parser', 'parse5'], (helper, parser, parse5) 
     fragment = htmlParser.parseFragment text
     @prototype.cleanTree fragment
     block = fragment.childNodes[0]
-    if button is 'add-button'
-      extra = null
-      switch block.nodeName
-        when 'tr'
-          extra = htmlParser.parseFragment '  <td></td>\n'
-        when 'table'
-          extra = htmlParser.parseFragment '  <tr>\n  \n  </tr>\n'
-        when 'tbody'
-          extra = htmlParser.parseFragment '  <tr>\n  \n  </tr>\n'
-        when 'thead'
-          extra = htmlParser.parseFragment '  <tr>\n  \n  </tr>\n'
-      if extra isnt null
-        block.childNodes = block.childNodes.concat extra.childNodes
-    else if button is 'subtract-button'
-      prev = null
-      if block.nodeName is 'tr'
-        prev = 'td'
-      else if block.nodeName in ['table', 'thead', 'tbody']
-        prev = 'tr'
-      if prev
-        last = block.childNodes.length
-        while last > 0
-          last--
-          if block.childNodes[last].nodeName is prev
-            break
-        block.childNodes = block.childNodes[...last]
+    prev = null
+    if block.nodeName is 'tr'
+      prev = 'td'
+    else if block.nodeName in ['table', 'thead', 'tbody']
+      prev = 'tr'
+    else if block.nodeName is 'div'
+      prev = 'div'
+    if prev
+      last = block.childNodes.length - 1
+      while last >= 0
+        if block.childNodes[last].nodeName is prev
+          break
+        last--
+      last++
+      if button is 'add-button'
+        if block.childNodes?.length is 1 and block.childNodes[0].nodeName is '#text' and block.childNodes[0].value.trim().length is 0
+          block.childNodes[0].value = '\n'
+        switch block.nodeName
+          when 'tr'
+            extra = htmlParser.parseFragment '\n  <td></td>'
+          when 'table'
+            extra = htmlParser.parseFragment '\n  <tr>\n  \n  </tr>'
+          when 'tbody'
+            extra = htmlParser.parseFragment '\n  <tr>\n  \n  </tr>'
+          when 'thead'
+            extra = htmlParser.parseFragment '\n  <tr>\n  \n  </tr>'
+          when 'div'
+            extra = htmlParser.parseFragment '\n  <div>\n  \n  </div>'
+        block.childNodes = block.childNodes[...last].concat(extra.childNodes).concat block.childNodes[last...]
+      else if button is 'subtract-button'
+          mid = last - 2
+          while mid >= 0
+            if block.childNodes[mid].nodeName is prev
+              break
+            mid--
+          block.childNodes = (if mid >=0 then block.childNodes[..mid] else []).concat block.childNodes[last...]
+          if block.childNodes.length is 1 and block.childNodes[0].nodeName is '#text' and block.childNodes[0].value.trim().length is 0
+            block.childNodes[0].value = '\n  \n'
 
     return htmlSerializer.serialize fragment
 

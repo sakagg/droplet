@@ -2952,18 +2952,14 @@ _[BEFORE_ATTRIBUTE_VALUE_STATE] = function beforeAttributeValueState(cp) {
     if (isWhitespace(cp))
         return;
 
-    if (cp === $.QUOTATION_MARK) {
-        this.currentAttr.value += toChar(cp);
+    if (cp === $.QUOTATION_MARK)
         this.state = ATTRIBUTE_VALUE_DOUBLE_QUOTED_STATE;
-    }
 
     else if (cp === $.AMPERSAND)
         this._reconsumeInState(ATTRIBUTE_VALUE_UNQUOTED_STATE);
 
-    else if (cp === $.APOSTROPHE) {
-        this.currentAttr.value += toChar(cp);
+    else if (cp === $.APOSTROPHE)
         this.state = ATTRIBUTE_VALUE_SINGLE_QUOTED_STATE;
-    }
 
     else if (cp === $.NULL) {
         this.currentAttr.value += UNICODE.REPLACEMENT_CHARACTER;
@@ -2993,10 +2989,8 @@ _[BEFORE_ATTRIBUTE_VALUE_STATE] = function beforeAttributeValueState(cp) {
 //12.2.4.38 Attribute value (double-quoted) state
 //------------------------------------------------------------------
 _[ATTRIBUTE_VALUE_DOUBLE_QUOTED_STATE] = function attributeValueDoubleQuotedState(cp) {
-    if (cp === $.QUOTATION_MARK) {
-        this.currentAttr.value += '"'
+    if (cp === $.QUOTATION_MARK)
         this.state = AFTER_ATTRIBUTE_VALUE_QUOTED_STATE;
-    }
 
     else if (cp === $.AMPERSAND) {
         this.additionalAllowedCp = $.QUOTATION_MARK;
@@ -3018,10 +3012,8 @@ _[ATTRIBUTE_VALUE_DOUBLE_QUOTED_STATE] = function attributeValueDoubleQuotedStat
 //12.2.4.39 Attribute value (single-quoted) state
 //------------------------------------------------------------------
 _[ATTRIBUTE_VALUE_SINGLE_QUOTED_STATE] = function attributeValueSingleQuotedState(cp) {
-    if (cp === $.APOSTROPHE) {
-        this.currentAttr.value += '\''
+    if (cp === $.APOSTROPHE)
         this.state = AFTER_ATTRIBUTE_VALUE_QUOTED_STATE;
-    }
 
     else if (cp === $.AMPERSAND) {
         this.additionalAllowedCp = $.APOSTROPHE;
