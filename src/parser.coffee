@@ -292,7 +292,8 @@ exports.Parser = class Parser
           unless lastIndex >= mark.location.column or lastIndex >= line.length
             if (opts.wrapAtRoot and stack.length is 0) or stack[stack.length - 1]?.type is 'indent'
               block = @constructHandwrittenBlock line[lastIndex...mark.location.column]
-              head.append block.start
+              
+			  head.append block.start
               head = block.end
 
             else
