@@ -1,6 +1,6 @@
 <html>
   <head>
-    <link rel="stylesheet" href="../vendor/qunit.css"/>
+    <link rel="stylesheet" href="lib/qunit.css"/>
     <style>
       #hidden {
         position: absolute;
@@ -20,108 +20,9 @@
     <div id="test-palette">
     </div>
   </div>
-  <script src="../vendor/require.js"></script>
   <script src="../vendor/ace/ace.js"></script>
-  <script src="../dist/droplet-full.js"></script>
-  <script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+  <script src="lib/jquery.min.js"></script>
   <script src="../vendor/qunit.js"></script>
-<script>
-require([
-  'droplet-helper',
-  'droplet-javascript',
-  'droplet'],
-function(helper, JavaScript, droplet) {
-
-  asyncTest('JS dotted methods', function() {
-    var customJS, customSerialization, expectedSerialization;
-    customJS = new JavaScript({
-      functions: {
-        'console.log': {},
-        speak: {},
-        'Math.log': {
-          value: true
-        },
-        log: {
-          value: true,
-          color: 'red'
-        },
-        setTimeout: {
-          command: true,
-          value: true
-        }
-      }
-    });
-    customSerialization = customJS.parse(
-        'return console.log(Math.log(log(x.log(~log))));').serialize();
-    expectedSerialization =
-        '<segment' +
-        '  isLassoSegment="false"' +
-        '><block' +
-        '  precedence="0"' +
-        '  color="yellow"' +
-        '  socketLevel="0"' +
-        '  classes="ReturnStatement mostly-block"' +
-        '>return <socket' +
-        '  precedence="0"' +
-        '  handwritten="false"' +
-        '  classes=""' +
-        '><block' +
-        '  precedence="2"' +
-        '  color="blue"' +
-        '  socketLevel="0"' +
-        '  classes="CallExpression mostly-block"' +
-        '>console.log(<socket' +
-        '  precedence="100"' +
-        '  handwritten="false"' +
-        '  classes=""' +
-        '><block' +
-        '  precedence="2"' +
-        '  color="green"' +
-        '  socketLevel="0"' +
-        '  classes="CallExpression mostly-value"' +
-        '>Math.log(<socket' +
-        '  precedence="100"' +
-        '  handwritten="false"' +
-        '  classes=""' +
-        '><block' +
-        '  precedence="2"' +
-        '  color="red"' +
-        '  socketLevel="0"' +
-        '  classes="CallExpression mostly-value"' +
-        '>log(<socket' +
-        '  precedence="100"' +
-        '  handwritten="false"' +
-        '  classes=""' +
-        '><block' +
-        '  precedence="2"' +
-        '  color="red"' +
-        '  socketLevel="0"' +
-        '  classes="CallExpression mostly-value"' +
-        '>x.log(<socket' +
-        '  precedence="100"' +
-        '  handwritten="false"' +
-        '  classes=""' +
-        '><block' +
-        '  precedence="4"' +
-        '  color="green"' +
-        '  socketLevel="0"' +
-        '  classes="UnaryExpression mostly-value"' +
-        '>~<socket' +
-        '  precedence="4"' +
-        '  handwritten="false"' +
-        '  classes=""' +
-        '>log</socket></block></socket' +
-        '>)</block></socket' +
-        '>)</block></socket' +
-        '>)</block></socket' +
-        '>)</block></socket' +
-        '>;</block></segment>';
-    strictEqual(
-        helper.xmlPrettyPrint(customSerialization),
-        helper.xmlPrettyPrint(expectedSerialization),
-        'Dotted known functions work');
-    start();
-  });
 
   asyncTest('JS Custom Colors', function() {
     var customJS, customSerialization, expectedSerialization;
@@ -230,16 +131,36 @@ function(helper, JavaScript, droplet) {
     start();
   });
 
-  asyncTest('JS empty indents', function() {
-    var customJS, customSerialization, code, stringifiedJS;
+  asyncTest('JS LogicalExpressions', function() {
+    var customJS, customSerialization, expectedSerialization;
     customJS = new JavaScript();
-    code = 'if (__) {\n\n}';
-    customSerialization = customJS.parse('if (__) {\n\n}');
-    stringifiedJS = customSerialization.stringify(customJS);
-    strictEqual(code, stringifiedJS);
+    customSerialization = customJS.parse(
+        'a && b').serialize();
+    expectedSerialization =
+        '<segment' +
+        '  isLassoSegment="false"' +
+        '><block' +
+        '  precedence="13"' +
+        '  color="cyan"' +
+        '  socketLevel="0"' +
+        '  classes="LogicalExpression mostly-value"' +
+        '><socket' +
+        '  precedence="13"' +
+        '  handwritten="false"' +
+        '  classes=""' +
+        '>a</socket> &amp;&amp; ' +
+        '<socket' +
+        '  precedence="13"' +
+        '  handwritten="false"' +
+        '  classes=""' +
+        '>b</socket></block></segment>';
+    strictEqual(
+        helper.xmlPrettyPrint(customSerialization),
+        helper.xmlPrettyPrint(expectedSerialization),
+        'Logical expression precedences are assigned.');
     start();
   });
-
 });
 </script>
+  <script src="js/jstest.js"></script>
 </html>
