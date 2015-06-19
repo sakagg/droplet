@@ -1,7 +1,7 @@
 helper = require '../helper.coffee'
 parser = require '../parser.coffee'
 
-parse5 = require '../../vendor/parse5/index.js'
+parse5 = require 'parse5'
 
 ATTRIBUTE_CLASSES = ['#attribute']
 
