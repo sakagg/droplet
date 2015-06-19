@@ -144,7 +144,10 @@ exports.HTMLParser = class HTMLParser extends parser.Parser
         end = start + att.name.length
         string = string[end...]
         if att.value.length isnt 0
-          diff = string.indexOf(att.value.toLowerCase()) + att.value.length
+          diff = string.indexOf(att.value.toLowerCase())
+          if string[diff-1] in ['"', '\''] and string[diff-1] is string[diff + att.value.length]
+            diff++
+          diff += att.value.length
           string = string[diff...]
           end += diff
         node.attributes.push {start: offset + start, end: offset + end}
