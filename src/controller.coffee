@@ -24,6 +24,7 @@ CURSOR_WIDTH_DECREASE = 3
 CURSOR_HEIGHT_DECREASE = 2
 CURSOR_UNFOCUSED_OPACITY = 0.5
 DEBUG_FLAG = false
+DROPDOWN_SCROLLBAR_PADDING = 17
 
 ANY_DROP = helper.ANY_DROP
 BLOCK_ONLY = helper.BLOCK_ONLY
@@ -223,6 +224,10 @@ exports.Editor = class Editor
 
     # Instantiate an ICE editor view
     @view = new view.View extend_ @standardViewSettings, respectEphemeral: true
+    @paletteView = new view.View extend_ @standardViewSettings, {
+      showDropdowns: @options.showDropdownInPalette ? false
+      respectEphemeral: true
+    }
     @dragView = new view.View extend_ @standardViewSettings, respectEphemeral: false
 
     boundListeners = []
@@ -570,7 +575,7 @@ Editor::redrawPalette = ->
 
   for entry in @currentPaletteBlocks
     # Layout this block
-    paletteBlockView = @view.getViewNodeFor entry.block
+    paletteBlockView = @paletteView.getViewNodeFor entry.block
     paletteBlockView.layout PALETTE_LEFT_MARGIN, lastBottomEdge
 
     # Render the block
@@ -651,14 +656,14 @@ Editor::trackerPointIsInAce = (point) ->
 # ### hitTest
 # Simple function for going through a linked-list block
 # and seeing what the innermost child is that we hit.
-Editor::hitTest = (point, block) ->
+Editor::hitTest = (point, block, view = @view) ->
   if @readOnly
     return null
 
   head = block.start; seek = block.end
 
   until head is seek
-    if head.type is 'blockStart' and @view.getViewNodeFor(head.container).path.contains point
+    if head.type is 'blockStart' and view.getViewNodeFor(head.container).path.contains point
       seek = head.container.end
     head = head.next
 
@@ -669,7 +674,7 @@ Editor::hitTest = (point, block) ->
   # If we didn't have a child hit, it's possible
   # that _we_ are the innermost child that hit. See if that's
   # the case.
-  else if block.type is 'block' and @view.getViewNodeFor(block).path.contains point
+  else if block.type is 'block' and view.getViewNodeFor(block).path.contains point
     return block
 
   # Nope, it's not. Answer is null.
@@ -1009,7 +1014,7 @@ hook 'mousemove', 1, (point, event, state) ->
     # NOTE: this really falls under "PALETTE SUPPORT", but must
     # go here. Try to organise this better.
     if @clickedBlockPaletteEntry
-      @draggingOffset = @view.getViewNodeFor(@draggingBlock).bounds[0].upperLeftCorner().from(
+      @draggingOffset = @paletteView.getViewNodeFor(@draggingBlock).bounds[0].upperLeftCorner().from(
         @trackerPointToPalette(@clickedPoint))
 
       # Substitute in expansion for this palette entry, if supplied.
@@ -1088,7 +1093,7 @@ hook 'mousemove', 1, (point, event, state) ->
               w: 0
               h: 0
               acceptLevel: acceptLevel
-              _ice_node: head.container
+              _droplet_node: head.container
 
       head = head.next
 
@@ -1159,21 +1164,31 @@ hook 'mousemove', 0, (point, event, state) ->
       @lastHighlight = @tree
 
     else
-      # Find the closest droppable block
-      testPoints = @dropPointQuadTree.retrieve {
-        x: mainPoint.x - MAX_DROP_DISTANCE
-        y: mainPoint.y - MAX_DROP_DISTANCE
-        w: MAX_DROP_DISTANCE * 2
-        h: MAX_DROP_DISTANCE * 2
-      }, (point) =>
-        unless (point.acceptLevel is helper.DISCOURAGE) and not event.shiftKey
-          distance = mainPoint.from(point)
-          distance.y *= 2; distance = distance.magnitude()
-          if distance < min and mainPoint.from(point).magnitude() < MAX_DROP_DISTANCE and
-             @view.getViewNodeFor(point._ice_node).highlightArea?
-            best = point._ice_node
-            min = distance
+      # If the user is touching the original location,
+      # assume they want to replace the block where they found it.
+      if @hitTest mainPoint, @draggingBlock
+        best = null
+      # Otherwise, find the closest droppable block
+      else
+        testPoints = @dropPointQuadTree.retrieve {
+          x: mainPoint.x - MAX_DROP_DISTANCE
+          y: mainPoint.y - MAX_DROP_DISTANCE
+          w: MAX_DROP_DISTANCE * 2
+          h: MAX_DROP_DISTANCE * 2
+        }, (point) =>
+          unless (point.acceptLevel is helper.DISCOURAGE) and not event.shiftKey
+            # Find a modified "distance" to the point
+            # that weights horizontal distance more
+            distance = mainPoint.from(point)
+            distance.y *= 2; distance = distance.magnitude()
 
+            # Select the node that is closest by said "distance"
+            if distance < min and mainPoint.from(point).magnitude() < MAX_DROP_DISTANCE and
+               @view.getViewNodeFor(point._droplet_node).highlightArea?
+              best = point._droplet_node
+              min = distance
+
+      # Update highlight if necessary.
       if best isnt @lastHighlight
         @clearHighlightCanvas()
 
@@ -1217,8 +1232,8 @@ hook 'mouseup', 1, (point, event, state) ->
         indentation = currentIndentation
         suffix = ''
 
-        if currentIndentation.length == line.length
-          # line is whitespace only.
+        if currentIndentation.length == line.length or currentIndentation.length == pos.column
+          # line is whitespace only or we're inserting at the beginning of a line
           # Append with a newline
           suffix = '\n' + indentation
         else if pos.column == line.length
@@ -1293,7 +1308,7 @@ hook 'mouseup', 1, (point, event, state) ->
         # If what we've dropped has a socket in it,
         # focus it.
         head = @draggingBlock.start
-        until head.type is 'socketStart' and head.container.isDroppable() or head is @draggingBlock.end
+        until head.type is 'socketStart' and head.container.editable() or head is @draggingBlock.end
           head = head.next
 
         if head.type is 'socketStart'
@@ -1635,7 +1650,7 @@ hook 'mousedown', 6, (point, event, state) ->
      @scrollOffsets.palette.x < palettePoint.x < @scrollOffsets.palette.x + @paletteCanvas.width
 
     for entry in @currentPaletteBlocks
-      hitTestResult = @hitTest palettePoint, entry.block
+      hitTestResult = @hitTest palettePoint, entry.block, @paletteView
 
       if hitTestResult?
         @setTextInputFocus null
@@ -1685,7 +1700,7 @@ hook 'rebuild_palette', 1, ->
 
     hoverDiv.title = data.title ? block.stringify(@mode)
 
-    bounds = @view.getViewNodeFor(block).totalBounds
+    bounds = @paletteView.getViewNodeFor(block).totalBounds
 
     hoverDiv.style.top = "#{bounds.y}px"
     hoverDiv.style.left = "#{bounds.x}px"
@@ -1698,10 +1713,9 @@ hook 'rebuild_palette', 1, ->
       hoverDiv.addEventListener 'mousemove', (event) =>
         palettePoint = @trackerPointToPalette new @draw.Point(
             event.clientX, event.clientY)
-        if @mainViewOrChildrenContains block, palettePoint
-          unless block is @currentHighlightedPaletteBlock
+        if @viewOrChildrenContains block, palettePoint, @paletteView
             @clearPaletteHighlightCanvas()
-            @paletteHighlightPath = @getHighlightPath block, {color: '#FF0'}
+            @paletteHighlightPath = @getHighlightPath block, {color: '#FF0'}, @paletteView
             @paletteHighlightPath.draw @paletteHighlightCtx
             @currentHighlightedPaletteBlock = block
         else if block is @currentHighlightedPaletteBlock
@@ -1800,6 +1814,11 @@ hook 'populate', 1, ->
         @populateSocket @textFocus, @hiddenInput.value
 
         @redrawTextInput()
+
+        # Update the dropdown size to match
+        # the new length, if it is visible.
+        if @dropdownVisible
+          @formatDropdown()
 
 Editor::resizeAceElement = ->
   width = @wrapperElement.clientWidth
@@ -2089,7 +2108,7 @@ Editor::populateSocket = (socket, string) ->
 Editor::hitTestTextInput = (point, block) ->
   head = block.start
   while head?
-    if head.type is 'socketStart' and head.next.type in ['text', 'socketEnd'] and
+    if head.type is 'socketStart' and head.container.isDroppable() and
         @view.getViewNodeFor(head.container).path.contains point
       return head.container
     head = head.next
@@ -2155,12 +2174,13 @@ hook 'mousedown', 2, (point, event, state) ->
 
   if hitTestResult?
     unless hitTestResult is @textFocus
-      @setTextInputFocus hitTestResult
-      @redrawMain()
+      if hitTestResult.editable()
+        @setTextInputFocus hitTestResult
+        @redrawMain()
 
-      if hitTestResult.hasDropdown() and
-          mainPoint.x - @view.getViewNodeFor(hitTestResult).bounds[0].x < helper.DROPDOWN_ARROW_WIDTH
-        @showDropdown()
+      if hitTestResult.hasDropdown() and ((not hitTestResult.editable()) or
+          mainPoint.x - @view.getViewNodeFor(hitTestResult).bounds[0].x < helper.DROPDOWN_ARROW_WIDTH)
+        @showDropdown hitTestResult
 
       @textInputSelecting = false
 
@@ -2192,48 +2212,75 @@ hook 'populate', 0, ->
   @dropdownElement.className = 'droplet-dropdown'
   @wrapperElement.appendChild @dropdownElement
 
-Editor::showDropdown = ->
-  if @textFocus.hasDropdown()
-    @dropdownElement.innerHTML = ''
-    @dropdownElement.style.display = 'inline-block'
+  @dropdownElement.innerHTML = ''
+  @dropdownElement.style.display = 'inline-block'
+  @dropdownVisible = false
 
-    # Closure the text focus; dropdown should work
-    # even after unfocused
-    textFocus = @textFocus
-    for el, i in @textFocus.dropdown() then do (el) =>
-      div = document.createElement 'div'
-      div.innerHTML = el.display
-      div.className = 'droplet-dropdown-item'
+# Update the dropdown to match
+# the current text focus font and size.
+Editor::formatDropdown = (socket = @textFocus) ->
+  @dropdownElement.style.fontFamily = @fontFamily
+  @dropdownElement.style.fontSize = @fontSize
+  @dropdownElement.style.minWidth = @view.getViewNodeFor(socket).bounds[0].width
 
-      # Match fonts
-      div.style.fontFamily = @fontFamily
-      div.style.fontSize = @fontSize
-      div.style.paddingLeft = helper.DROPDOWN_ARROW_WIDTH
+Editor::showDropdown = (socket = @textFocus) ->
+  @dropdownVisible = true
 
-      setText = (text) =>
-        # Attempting to populate the socket after the dropdown has closed should no-op
-        return if @dropdownElement.style.display == 'none'
+  dropdownItems = []
 
-        @populateSocket @textFocus, text
-        @hiddenInput.value = text
+  @dropdownElement.innerHTML = ''
+  @dropdownElement.style.display = 'inline-block'
 
-        @redrawMain()
-        @hideDropdown()
+  @formatDropdown socket
 
-      div.addEventListener 'mouseup', ->
-        if el.click
-          el.click(setText)
-        else
-          setText(el.text)
-      @dropdownElement.appendChild div
+  for el, i in socket.dropdown.generate() then do (el) =>
+    div = document.createElement 'div'
+    div.innerHTML = el.display
+    div.className = 'droplet-dropdown-item'
 
-    location = @view.getViewNodeFor(@textFocus).bounds[0]
+    dropdownItems.push div
+
+    div.style.paddingLeft = helper.DROPDOWN_ARROW_WIDTH
+
+    setText = (text) =>
+      # Attempting to populate the socket after the dropdown has closed should no-op
+      return if @dropdownElement.style.display == 'none'
+
+      @populateSocket socket, text
+      @hiddenInput.value = text
+
+      @redrawMain()
+      @hideDropdown()
+
+    div.addEventListener 'mouseup', ->
+      if el.click
+        el.click(setText)
+      else
+        setText(el.text)
+
+    @dropdownElement.appendChild div
+
+  @dropdownElement.style.top = '-9999px'
+  @dropdownElement.style.left = '-9999px'
+
+  # Wait for a render. Then,
+  # if the div is scrolled vertically, add
+  # some padding on the right. After checking for this,
+  # move the dropdown element into position
+  setTimeout (=>
+    if @dropdownElement.offsetHeight < @dropdownElement.scrollHeight
+      for el in dropdownItems
+        el.style.paddingRight = DROPDOWN_SCROLLBAR_PADDING
+
+    location = @view.getViewNodeFor(socket).bounds[0]
 
     @dropdownElement.style.top = location.y + @fontSize - @scrollOffsets.main.y + 'px'
     @dropdownElement.style.left = location.x - @scrollOffsets.main.x + @dropletElement.offsetLeft + @mainCanvas.offsetLeft + 'px'
     @dropdownElement.style.minWidth = location.width + 'px'
+  ), 0
 
 Editor::hideDropdown= ->
+  @dropdownVisible = false
   @dropdownElement.style.display = 'none'
 
 hook 'dblclick', 0, (point, event, state) ->
@@ -2248,11 +2295,12 @@ hook 'dblclick', 0, (point, event, state) ->
   # If they have clicked a socket,
   # focus it, and
   unless hitTestResult is @textFocus
-    @setTextInputFocus null
-    @redrawMain()
-    hitTestResult = @hitTestTextInput mainPoint, @tree
+    if hitTestResult.editable()
+      @setTextInputFocus null
+      @redrawMain()
+      hitTestResult = @hitTestTextInput mainPoint, @tree
 
-  if hitTestResult?
+  if hitTestResult? and hitTestResult.editable()
     @setTextInputFocus hitTestResult
     @redrawMain()
 
@@ -2700,7 +2748,7 @@ Editor::moveCursorHorizontally = (direction) ->
         break
 
     if head.type is 'socketStart' and
-        (head.next.type is 'text' or head.next is head.container.end)
+       head.container.editable()
       # Avoid problems with reparses by getting text offset location
       # of the given socket before reparsing and recovering it afterward.
       if @textFocus?
@@ -2792,7 +2840,7 @@ Editor::getSocketAtChar = (chars) ->
   charsCounted = 0
 
   until charsCounted >= chars and head.type is 'socketStart' and
-      (head.next.type is 'text' or head.next is head.container.end)
+      head.container.isDroppable()
     if head.type is 'text' then charsCounted += head.value.length
 
     head = head.next
@@ -2806,7 +2854,7 @@ hook 'keydown', 0, (event, state) ->
     else head = @cursor
 
     until (not head?) or head.type is 'socketEnd' and
-        (head.container.start.next.type is 'text' or head.container.start.next is head.container.end)
+        head.container.editable()
       head = head.prev
 
     if head?
@@ -2828,7 +2876,7 @@ hook 'keydown', 0, (event, state) ->
     else head = @cursor
 
     until (not head?) or head.type is 'socketStart' and
-        (head.container.start.next.type is 'text' or head.container.start.next is head.container.end)
+        head.container.editable()
       head = head.next
     if head?
       # Avoid problems with reparses by getting text offset location
@@ -3226,7 +3274,7 @@ Editor::performMeltAnimation = (fadeTime = 500, translateTime = 1000, cb = ->) -
       div.style.width = "#{@gutter.offsetWidth}px"
       translatingElements.push div
 
-      div.className = 'droplet-transitioning-element droplet-transitioning-gutter'
+      div.className = 'droplet-transitioning-element droplet-transitioning-gutter droplet-gutter-line'
       # Add annotation
       if @annotations[line]?
         div.className += ' droplet_' + getMostSevereAnnotationType(@annotations[line])
@@ -3410,7 +3458,7 @@ Editor::performFreezeAnimation = (fadeTime = 500, translateTime = 500, cb = ->)-
         div.style.top = "#{@aceEditor.session.documentToScreenRow(line, 0) *
             lineHeight - aceScrollTop}px"
 
-        div.className = 'droplet-transitioning-element droplet-transitioning-gutter'
+        div.className = 'droplet-transitioning-element droplet-transitioning-gutter droplet-gutter-line'
         # Add annotation
         if @annotations[line]?
           div.className += ' droplet_' + getMostSevereAnnotationType(@annotations[line])
@@ -3619,7 +3667,7 @@ hook 'redraw_main', 1, ->
 hook 'redraw_palette', 0, ->
   bounds = new @draw.NoRectangle()
   for entry in @currentPaletteBlocks
-    bounds.unite @view.getViewNodeFor(entry.block).getBounds()
+    bounds.unite @paletteView.getViewNodeFor(entry.block).getBounds()
 
   # For now, we will comment out this line
   # due to bugs
@@ -3687,8 +3735,8 @@ hook 'populate', 0, ->
   @markedBlocks = {}; @nextMarkedBlockId = 0
   @extraMarks = {}
 
-Editor::getHighlightPath = (model, style) ->
-  path = @view.getViewNodeFor(model).path.clone()
+Editor::getHighlightPath = (model, style, view = @view) ->
+  path = view.getViewNodeFor(model).path.clone()
 
   path.style.fillColor = null
   path.style.strokeColor = style.color
@@ -4207,14 +4255,14 @@ hook 'populate', 0, ->
 # its grayed-out spot, cancel the drag.
 
 # TODO possibly move this next utility function to view?
-Editor::mainViewOrChildrenContains = (model, point) ->
-  modelView = @view.getViewNodeFor model
+Editor::viewOrChildrenContains = (model, point, view = @view) ->
+  modelView = view.getViewNodeFor model
 
   if modelView.path.contains point
     return true
 
   for childObj in modelView.children
-    if @mainViewOrChildrenContains childObj.child, point
+    if @viewOrChildrenContains childObj.child, point, view
       return true
 
   return false
@@ -4227,7 +4275,7 @@ hook 'mouseup', 0.5, (point, event) ->
     )
     renderPoint = @trackerPointToMain trackPoint
 
-    if @inTree(@draggingBlock) and @mainViewOrChildrenContains @draggingBlock, renderPoint
+    if @inTree(@draggingBlock) and @viewOrChildrenContains @draggingBlock, renderPoint
       @draggingBlock.ephemeral = false
       @endDrag()
 
@@ -4349,8 +4397,8 @@ Editor::addLineNumberForLine = (line) ->
         @tooltipElement.textContent = title
       @tooltipElement.style.display = 'block'
     lineDiv.addEventListener 'mousemove', (event) =>
-      @tooltipElement.style.left = event.pageX
-      @tooltipElement.style.top = event.pageY
+      @tooltipElement.style.left = event.pageX + 'px'
+      @tooltipElement.style.top = event.pageY + 'px'
     lineDiv.addEventListener 'mouseout', =>
       @tooltipElement.style.display = 'none'
 
