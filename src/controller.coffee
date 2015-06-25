@@ -1169,9 +1169,9 @@ hook 'mousemove', 0, (point, event, state) ->
       # assume they want to replace the block where they found it.
       if @hitTest mainPoint, @draggingBlock
         best = null
+        bestIndex = null
       # Otherwise, find the closest droppable block
       else
-        # Find the closest droppable block
         testPoints = @dropPointQuadTree.retrieve {
           x: mainPoint.x - MAX_DROP_DISTANCE
           y: mainPoint.y - MAX_DROP_DISTANCE
@@ -1191,13 +1191,14 @@ hook 'mousemove', 0, (point, event, state) ->
               bestIndex = point._droplet_index
               min = distance
 
-        if best isnt @lastHighlight or bestIndex isnt @lastHighlightIndex
-          @clearHighlightCanvas()
+      # Update highlight if necessary.
+      if best isnt @lastHighlight or bestIndex isnt @lastHighlightIndex
+        @clearHighlightCanvas()
 
-          if best? then @view.getViewNodeFor(best).highlightAreas[bestIndex].draw @highlightCtx
+        if best? then @view.getViewNodeFor(best).highlightAreas[bestIndex].draw @highlightCtx
 
-          @lastHighlight = best
-          @lastHighlightIndex = bestIndex
+        @lastHighlight = best
+        @lastHighlightIndex = bestIndex
 
     palettePoint = @trackerPointToPalette position
 
@@ -1334,9 +1335,9 @@ hook 'mouseup', 1, (point, event, state) ->
           until head.type is 'socketStart' and head.container.editable() or head is @draggingBlock.end
             head = head.next
 
-            if head.type is 'socketStart'
-              @setTextInputFocus null
-              @setTextInputFocus head.container
+          if head.type is 'socketStart'
+            @setTextInputFocus null
+            @setTextInputFocus head.container
 
       # Fire the event for sound
       @fireEvent 'block-click'
