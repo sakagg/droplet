@@ -753,7 +753,6 @@ exports.SocketEndToken = class SocketEndToken extends EndToken
 
 exports.Socket = class Socket extends Container
   constructor: (@precedence = 0, @handwritten = false, @classes = [], @dropdown = null, @dropLocations = []) ->
-    console.log @dropLocations
     @start = new SocketStartToken this
     @end = new SocketEndToken this
 
@@ -762,6 +761,8 @@ exports.Socket = class Socket extends Container
     super
 
   hasDropdown: -> @dropdown? and @isDroppable()
+
+  editable: -> (not (@dropdown? and @dropdown.dropdownOnly)) and @isDroppable()
 
   isDroppable: -> @start.next is @end or @start.next.type is 'text'
 
