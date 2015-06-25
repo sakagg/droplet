@@ -1294,14 +1294,23 @@ hook 'mouseup', 1, (point, event, state) ->
           if @lastHighlightIndex isnt 0 and @lastHighlight.start.next.type is 'text'
             breakInd = @lastHighlight.dropLocations[@lastHighlightIndex - 1]
             string = @lastHighlight.start.next._value
-            string = string[...breakInd] + @draggingBlock.stringify(@mode.empty) + string[breakInd...]
+            leftPart = string[...breakInd]
+
+            #Append space to left and right parts before contatenation
+            if leftPart.length isnt 0 and leftPart[leftPart.length - 1] isnt ' '
+              leftPart += ' '
+            rightPart = string[breakInd...]
+            if rightPart.length isnt 0 and rightPart[0] isnt ' '
+              rightPart = ' ' + rightPart
+            string = leftPart + @draggingBlock.stringify(@mode.empty) + rightPart
+
             @populateSocket @lastHighlight, string
             reparseable = @lastHighlight
             while reparseable.type isnt 'block' or 'not-reparseable' in reparseable.classes
               if not reparseable.parent
                 break
               reparseable = reparseable.parent
-            console.log reparseable
+
             @reparseRawReplace reparseable
             lostParent = true
           else
@@ -1315,16 +1324,16 @@ hook 'mouseup', 1, (point, event, state) ->
             @addMicroUndoOperation new DropOperation @draggingBlock, @tree.start
             @spliceIn @draggingBlock, @tree.start #MUTATION
 
-      # Move the cursor to the position we just
-      # dropped the block
-      @moveCursorTo @draggingBlock.end, true
+      if not lostParent
+        # Move the cursor to the position we just
+        # dropped the block
+        @moveCursorTo @draggingBlock.end, true
 
       # Reparse the parent if we are
       # in a socket
       #
       # TODO "reparseable" property, bubble up
       # TODO performance on large programs
-      if not lostParent
         if @lastHighlight.type is 'socket'
           @reparseRawReplace @draggingBlock.parent.parent
 
@@ -1336,7 +1345,6 @@ hook 'mouseup', 1, (point, event, state) ->
             head = head.next
 
           if head.type is 'socketStart'
-            @setTextInputFocus null
             @setTextInputFocus head.container
 
       # Fire the event for sound
@@ -1365,9 +1373,9 @@ Editor::reparseRawReplace = (oldBlock, originalTrigger = oldBlock) ->
       # TODO upon refactoring, the cursor should no longer
       # need to be recovered; it should be a row/col pointer
       # all the time.
-      pos = @getRecoverableCursorPosition()
+      #pos = @getRecoverableCursorPosition()
       newBlock.rawReplace oldBlock
-      @recoverCursorPosition pos
+      #@recoverCursorPosition pos
 
   catch e
     # Attempt to bubble up the reparse, passing along

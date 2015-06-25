@@ -86,6 +86,8 @@ exports.HTMLParser = class HTMLParser extends parser.Parser
 
   getClasses: (node) ->
     classes = [node.nodeName]
+    if node.nodeName is '#text'
+      classes = classes.concat 'not-reparseable'
     if node.nodeName in ['thead', 'tbody', 'tr', 'table', 'div']
       classes = classes.concat 'add-button'
       if node.childNodes.length isnt 0
@@ -307,7 +309,7 @@ exports.HTMLParser = class HTMLParser extends parser.Parser
       classes: @getClasses node
       socketLevel: @getSocketLevel node
 
-  htmlSocket: (node, depth, precedence, bounds, classes) ->
+  htmlSocket: (node, depth, precedence, bounds, classes, dropLocations) ->
     #console.log "Adding Socket: ", JSON.stringify(bounds ? @getBounds node)
     @addSocket
       bounds: bounds ? @getBounds node
@@ -315,6 +317,7 @@ exports.HTMLParser = class HTMLParser extends parser.Parser
       precedence: precedence
       classes: classes ? @getClasses node
       acccepts: @getAcceptsRule node
+      dropLocations: dropLocations ? dropLocations
 
   getIndentPrefix: (bounds, indentDepth, depth) ->
     #console.log JSON.stringify(bounds), indentDepth, depth
@@ -331,12 +334,32 @@ exports.HTMLParser = class HTMLParser extends parser.Parser
       else
         return DEFAULT_INDENT_DEPTH
 
-  handleText: (node, depth) ->
+  handleText: (node, depth, indentDepth) ->
+    findDropLocations = (text) ->
+      locations = []
+      for c, i in text
+        if c is ' '
+          locations.push i
+      if locations[locations.length - 1] isnt text.length
+        locations.push text.length
+      if locations[0] isnt 0
+        locations.push 0
+      return locations
+
     text = node.value.split '\n'
     loc = {start: node.__location.start}
-    for line in text
+    for line, i in text
+      unless i is 0
+        if line.length >= indentDepth and line[...indentDepth].trim().length is 0
+          line = line[indentDepth...]
+          loc.start += indentDepth
+        else
+          newLine = line.trimLeft()
+          loc.start += line.length - newLine.length
+          line = newLine
       loc.end = loc.start + line.length
-      @htmlSocket node, depth, null, @genBounds loc
+      #console.log loc.start, loc.end, JSON.stringify @genBounds loc
+      @htmlSocket node, depth, null, @genBounds(loc), null, findDropLocations line
       loc.start = loc.end + 1
 
   markRoot: ->
@@ -408,8 +431,7 @@ exports.HTMLParser = class HTMLParser extends parser.Parser
 
       when 'text'
         @htmlBlock node, depth, bounds
-        @htmlSocket node, depth + 1, null
-        #@handleText node, depth + 1
+        @handleText node, depth + 1, indentDepth
 
       when 'comment'
         @htmlBlock node, depth, bounds
@@ -667,6 +689,8 @@ HTMLParser.drop = (block, context, pred) ->
     when 'template'
       return check blockType, METADATA_CONTENT.concat(FLOW_CONTENT).concat(['ol', 'ul', 'dl', 'figure', 'ruby', 'object', 'video', 'audio', 'table', 'colgroup', 'thead', 'tbody', 'tfoot', 'tr', 'fieldset', 'select'])
     when 'canvas'
+      return check blockType, FLOW_CONTENT
+    when '#text'
       return check blockType, FLOW_CONTENT
     when '__segment'
       if blockType is '#documentType'
